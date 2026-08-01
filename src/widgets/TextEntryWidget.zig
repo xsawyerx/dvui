@@ -1133,6 +1133,13 @@ pub fn processEvent(self: *TextEntryWidget, e: *Event) void {
             if (me.action == .focus) {
                 e.handle(@src(), self.data());
                 dvui.focusWidget(self.data().id, null, e.num);
+            } else if (me.action == .press and me.button == .middle) {
+                // X11/Wayland middle-click pastes the primary selection. Focus
+                // the entry and insert at the cursor (empty selection = no-op on
+                // platforms without a primary selection).
+                e.handle(@src(), self.data());
+                dvui.focusWidget(self.data().id, null, e.num);
+                self.pastePrimary();
             }
         },
         else => {},
@@ -1164,18 +1171,28 @@ pub fn processEvent(self: *TextEntryWidget, e: *Event) void {
 }
 
 pub fn paste(self: *TextEntryWidget) void {
-    const clip_text = dvui.clipboardText();
+    self.insertText(dvui.clipboardText());
+}
 
+/// Paste from the primary selection (X11/Wayland middle-click). No-op where the
+/// platform has no primary selection (it returns empty).
+pub fn pastePrimary(self: *TextEntryWidget) void {
+    self.insertText(dvui.primarySelectionText());
+}
+
+/// Insert `text` at the cursor. Single-line entries drop embedded newlines
+/// (each line is inserted, the newline itself skipped).
+fn insertText(self: *TextEntryWidget, text: []const u8) void {
     if (self.init_opts.multiline) {
-        self.textTyped(clip_text, false);
+        self.textTyped(text, false);
     } else {
         var i: usize = 0;
-        while (i < clip_text.len) {
-            if (std.mem.findScalar(u8, clip_text[i..], '\n')) |idx| {
-                self.textTyped(clip_text[i..][0..idx], false);
+        while (i < text.len) {
+            if (std.mem.findScalar(u8, text[i..], '\n')) |idx| {
+                self.textTyped(text[i..][0..idx], false);
                 i += idx + 1;
             } else {
-                self.textTyped(clip_text[i..], false);
+                self.textTyped(text[i..], false);
                 break;
             }
         }

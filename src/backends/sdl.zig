@@ -909,6 +909,22 @@ pub fn clipboardTextSet(self: *SDLBackend, text: []const u8) !void {
     try toErr(c.SDL_SetClipboardText(c_text.ptr), "SDL_SetClipboardText in clipboardTextSet");
 }
 
+/// The X11/Wayland PRIMARY selection: the "highlight to copy, middle-click to
+/// paste" buffer, separate from the clipboard. Empty where there's no such
+/// concept (SDL2, macOS, Windows).
+pub fn primarySelectionText(self: *SDLBackend) ![]const u8 {
+    if (sdl3) {
+        if (!c.SDL_HasPrimarySelectionText()) return &.{};
+        const p = c.SDL_GetPrimarySelectionText();
+        defer c.SDL_free(p); // must free even on error
+        const str = std.mem.span(p);
+        if (str.len == 0) logErr("SDL_GetPrimarySelectionText in primarySelectionText") catch {};
+        return try self.arena.dupe(u8, str);
+    } else {
+        return &.{};
+    }
+}
+
 pub fn openURL(self: *SDLBackend, url: []const u8, _: bool) !void {
     const c_url = try self.arena.dupeSentinel(u8, url, 0);
     defer self.arena.free(c_url);

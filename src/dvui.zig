@@ -1031,6 +1031,19 @@ pub fn clipboardText() []const u8 {
     };
 }
 
+/// Get the text of the primary selection (the X11/Wayland "highlight to copy,
+/// middle-click to paste" buffer). Empty on platforms without one. Caller must
+/// copy.
+///
+/// Only valid between `Window.begin`and `Window.end`.
+pub fn primarySelectionText() []const u8 {
+    const cw = currentWindow();
+    return cw.backend.primarySelectionText() catch |err| blk: {
+        logError(@src(), err, "Could not get primary selection text", .{});
+        break :blk "";
+    };
+}
+
 /// Set the textual content of the system clipboard.
 ///
 /// Only valid between `Window.begin`and `Window.end`.
