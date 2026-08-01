@@ -2117,6 +2117,51 @@ pub fn enableSDLLogging() void {
     }
 }
 
+// ── Terminal quit signals (Ctrl+C) ───────────────────────────────────────────
+// SDL only turns SIGINT/SIGTERM into a quit event at the next SDL_PumpEvents, so
+// a loop parked in SDL_WaitEventTimeout keeps sleeping through Ctrl+C until some
+// unrelated event (a mouse move, a focus change) happens to wake it. Take the
+// signals over ourselves: block them process-wide and consume them on a
+// dedicated thread that pushes a real SDL_EVENT_QUIT. The push wakes the wait
+// immediately and the quit then closes through the normal path. POSIX only;
+// Windows console Ctrl+C is a separate mechanism we don't handle here.
+const quit_signals_supported = builtin.os.tag != .windows;
+
+fn quitSignalThread(blocked: std.c.sigset_t) void {
+    var set = blocked;
+    while (true) {
+        var signo: c_int = 0;
+        // sigwait consumes one of the blocked signals; it only fails on a bad
+        // set, in which case there's nothing useful to retry.
+        if (std.c.sigwait(&set, &signo) != 0) return;
+        var ue = std.mem.zeroes(c.SDL_Event);
+        ue.type = if (sdl3) c.SDL_EVENT_QUIT else c.SDL_QUIT;
+        // SDL's event queue is thread safe; this is the whole point of the
+        // exercise (wake the main loop from off-thread).
+        _ = c.SDL_PushEvent(&ue);
+    }
+}
+
+/// Route terminal SIGINT/SIGTERM into an immediate SDL quit. Call once, before
+/// SDL_Init, so every thread SDL (and we) spawn afterwards inherits the block
+/// and our sigwait thread stays the sole consumer. The body sits inside a
+/// comptime-known `if` so the POSIX-only calls aren't compiled on Windows.
+fn installQuitSignalHandler() void {
+    if (quit_signals_supported) {
+        // Tell SDL not to install its own (lazy) SIGINT/SIGTERM handling; ours.
+        _ = c.SDL_SetHint(c.SDL_HINT_NO_SIGNAL_HANDLERS, "1");
+
+        var set = std.posix.sigemptyset();
+        std.posix.sigaddset(&set, .INT);
+        std.posix.sigaddset(&set, .TERM);
+        var old = std.posix.sigemptyset();
+        if (std.c.pthread_sigmask(std.c.SIG.BLOCK, &set, &old) == 0) {
+            const t = std.Thread.spawn(.{}, quitSignalThread, .{set}) catch return;
+            t.detach();
+        }
+    }
+}
+
 /// This is what is run if you are using `dvui.App` with this backend.
 pub fn main(main_init: std.process.Init) !u8 {
     dvui.App.main_init = main_init;
@@ -2131,6 +2176,10 @@ pub fn main(main_init: std.process.Init) !u8 {
         dvui.Backend.Common.windowsAttachConsole() catch {};
     }
     enableSDLLogging();
+
+    // Before SDL_Init on either path below, so terminal Ctrl+C closes the app
+    // right away instead of hanging until the window next sees an event.
+    installQuitSignalHandler();
 
     if (sdl3 and (sdl_options.callbacks orelse true) and (builtin.target.os.tag == .macos or builtin.target.os.tag == .windows)) {
         // We are using sdl's callbacks to support rendering during OS resizing
